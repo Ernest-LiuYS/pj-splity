@@ -1,19 +1,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  Plus, 
-  Trash2, 
-  Users, 
-  Receipt, 
-  ArrowRightLeft, 
-  Sparkles, 
-  Loader2, 
+import {
+  Plus,
+  Trash2,
+  Users,
+  Receipt,
+  ArrowRightLeft,
+  Sparkles,
+  Loader2,
   CheckCircle2,
   AlertCircle,
   ChevronRight,
   UserPlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -26,6 +25,20 @@ function cn(...inputs: ClassValue[]) {
 interface Participant {
   id: string;
   name: string;
+  colorIndex: number;
+}
+
+const AVATAR_COLORS = [
+  { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100', hoverBorder: 'hover:border-blue-200', activeBg: 'bg-blue-100', activeText: 'text-blue-800', activeBorder: 'border-blue-300' },
+  { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-100', hoverBorder: 'hover:border-emerald-200', activeBg: 'bg-emerald-100', activeText: 'text-emerald-800', activeBorder: 'border-emerald-300' },
+  { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100', hoverBorder: 'hover:border-amber-200', activeBg: 'bg-amber-100', activeText: 'text-amber-800', activeBorder: 'border-amber-300' },
+  { bg: 'bg-fuchsia-50', text: 'text-fuchsia-600', border: 'border-fuchsia-100', hoverBorder: 'hover:border-fuchsia-200', activeBg: 'bg-fuchsia-100', activeText: 'text-fuchsia-800', activeBorder: 'border-fuchsia-300' },
+  { bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-100', hoverBorder: 'hover:border-rose-200', activeBg: 'bg-rose-100', activeText: 'text-rose-800', activeBorder: 'border-rose-300' },
+  { bg: 'bg-cyan-50', text: 'text-cyan-600', border: 'border-cyan-100', hoverBorder: 'hover:border-cyan-200', activeBg: 'bg-cyan-100', activeText: 'text-cyan-800', activeBorder: 'border-cyan-300' },
+];
+
+function getPColor(index: number) {
+  return AVATAR_COLORS[index % AVATAR_COLORS.length];
 }
 
 interface Expense {
@@ -43,54 +56,19 @@ interface Settlement {
 }
 
 // --- AI Service ---
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-
 async function parseScenario(message: string) {
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Parse this bill splitting scenario and return a JSON object.
-    Scenario: "${message}"
-    
-    Rules:
-    1. Identify all unique participants.
-    2. Identify all expenses, their amounts, who paid them, and who they should be split among based on the text.
-    3. If not specified, assume an expense is split among ALL participants.
-    4. Return ONLY a JSON object with this structure:
-    {
-      "participants": ["Name1", "Name2"],
-      "expenses": [
-        { "description": "Item Name", "amount": 10.5, "paidBy": "Name1", "splitAmong": ["Name1", "Name2"] }
-      ]
-    }`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          participants: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          expenses: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                description: { type: Type.STRING },
-                amount: { type: Type.NUMBER },
-                paidBy: { type: Type.STRING },
-                splitAmong: { type: Type.ARRAY, items: { type: Type.STRING } }
-              },
-              required: ["description", "amount", "paidBy", "splitAmong"]
-            }
-          }
-        },
-        required: ["participants", "expenses"]
-      }
-    }
+  const response = await fetch('/api/parseScenario', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
   });
 
-  return JSON.parse(response.text || '{}');
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Failed to parse scenario');
+  }
+
+  return response.json();
 }
 
 // --- Components ---
@@ -106,7 +84,7 @@ export default function App() {
   const addParticipant = (name: string) => {
     if (!name.trim()) return;
     const id = Math.random().toString(36).substr(2, 9);
-    setParticipants([...participants, { id, name: name.trim() }]);
+    setParticipants([...participants, { id, name: name.trim(), colorIndex: participants.length }]);
   };
 
   const removeParticipant = (id: string) => {
@@ -144,15 +122,15 @@ export default function App() {
     setError(null);
     try {
       const data = await parseScenario(aiInput);
-      
+
       // Map names to IDs
       const nameToIdMap: Record<string, string> = {};
       const newParticipants: Participant[] = [];
-      
-      data.participants.forEach((name: string) => {
+
+      data.participants.forEach((name: string, index: number) => {
         const id = Math.random().toString(36).substr(2, 9);
         nameToIdMap[name] = id;
-        newParticipants.push({ id, name });
+        newParticipants.push({ id, name, colorIndex: index });
       });
 
       const newExpenses: Expense[] = data.expenses.map((e: any) => ({
@@ -179,7 +157,7 @@ export default function App() {
     const balances: Record<string, number> = {};
     const spent: Record<string, number> = {};
     const share: Record<string, number> = {};
-    
+
     participants.forEach(p => {
       balances[p.id] = 0;
       spent[p.id] = 0;
@@ -190,7 +168,7 @@ export default function App() {
       // Payer gets credit
       balances[expense.paidBy] += expense.amount;
       spent[expense.paidBy] += expense.amount;
-      
+
       // Split among participants
       if (expense.splitAmong.length > 0) {
         const itemShare = expense.amount / expense.splitAmong.length;
@@ -220,19 +198,19 @@ export default function App() {
     while (dIdx < tempDebtors.length && cIdx < tempCreditors.length) {
       const [dId, dBal] = tempDebtors[dIdx];
       const [cId, cBal] = tempCreditors[cIdx];
-      
+
       const amount = Math.min(Math.abs(dBal), cBal);
       results.push({ from: dId, to: cId, amount });
-      
+
       tempDebtors[dIdx][1] += amount;
       tempCreditors[cIdx][1] -= amount;
-      
+
       if (Math.abs(tempDebtors[dIdx][1]) < 0.01) dIdx++;
       if (Math.abs(tempCreditors[cIdx][1]) < 0.01) cIdx++;
     }
 
-    return { 
-      settlements: results, 
+    return {
+      settlements: results,
       individualBalances: participants.map(p => ({
         ...p,
         net: balances[p.id],
@@ -257,7 +235,7 @@ export default function App() {
       {/* Header */}
       <header className="sticky top-0 z-50 glass px-4 sm:px-6 py-4 flex items-center justify-between border-b border-brand-200/50">
         <div className="flex items-center gap-3">
-          <motion.div 
+          <motion.div
             whileHover={{ rotate: 15 }}
             className="w-9 h-9 sm:w-10 sm:h-10 bg-brand-900 rounded-xl flex items-center justify-center shadow-lg shadow-brand-900/20"
           >
@@ -284,7 +262,7 @@ export default function App() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 pt-6 sm:pt-10 space-y-12 sm:space-y-16">
-        
+
         {/* AI Input Section */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
@@ -329,7 +307,7 @@ export default function App() {
             </button>
           </div>
           {error && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               className="flex items-center gap-3 text-rose-600 text-xs font-semibold bg-rose-50 p-4 rounded-2xl border border-rose-100"
@@ -347,14 +325,14 @@ export default function App() {
               <Users size={12} className="text-brand-900" />
               Participants
             </div>
-            <button 
+            <button
               onClick={() => addParticipant(`Person ${participants.length + 1}`)}
               className="px-3 py-1.5 rounded-xl bg-brand-100 text-brand-900 text-[10px] font-bold uppercase tracking-wider hover:bg-brand-900 hover:text-white transition-all flex items-center gap-1.5"
             >
               <UserPlus size={12} /> Add Person
             </button>
           </div>
-          
+
           <div className="flex flex-wrap gap-3">
             <AnimatePresence mode="popLayout">
               {participants.map((p) => (
@@ -364,14 +342,19 @@ export default function App() {
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
-                  className="flex items-center gap-2 pl-4 pr-2 py-2 bg-white rounded-2xl border border-brand-200 shadow-sm hover:border-brand-900 transition-colors group"
+                  className={cn(
+                    "flex items-center gap-2 pl-4 pr-2 py-2 bg-white rounded-2xl border shadow-sm transition-colors group",
+                    getPColor(p.colorIndex).border,
+                    getPColor(p.colorIndex).hoverBorder
+                  )}
                 >
                   <input
                     value={p.name}
                     onChange={(e) => setParticipants(participants.map(item => item.id === p.id ? { ...item, name: e.target.value } : item))}
-                    className="bg-transparent border-none focus:ring-0 text-sm font-bold w-24 outline-none"
+                    onFocus={(e) => e.target.select()}
+                    className={cn("bg-transparent border-none focus:ring-0 text-sm font-bold w-24 outline-none", getPColor(p.colorIndex).text)}
                   />
-                  <button 
+                  <button
                     onClick={() => removeParticipant(p.id)}
                     className="p-1.5 rounded-lg text-brand-200 hover:text-rose-500 hover:bg-rose-50 transition-all"
                   >
@@ -395,7 +378,7 @@ export default function App() {
               <Receipt size={12} className="text-brand-900" />
               Expenses
             </div>
-            <button 
+            <button
               onClick={addExpense}
               className="px-3 py-1.5 rounded-xl bg-brand-900 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-brand-800 transition-all flex items-center gap-1.5 shadow-lg shadow-brand-900/10"
             >
@@ -419,6 +402,7 @@ export default function App() {
                       <input
                         value={expense.description}
                         onChange={(e) => updateExpense(expense.id, { description: e.target.value })}
+                        onFocus={(e) => e.target.select()}
                         className="w-full bg-transparent border-none focus:ring-0 text-lg sm:text-xl font-bold outline-none placeholder:text-brand-200"
                         placeholder="What was it for?"
                       />
@@ -447,7 +431,7 @@ export default function App() {
                           placeholder="0.00"
                         />
                       </div>
-                      <button 
+                      <button
                         onClick={() => removeExpense(expense.id)}
                         className="p-3 rounded-xl text-brand-200 hover:text-rose-500 hover:bg-rose-50 transition-all min-w-[44px] min-h-[44px] flex items-center justify-center"
                       >
@@ -459,7 +443,7 @@ export default function App() {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="text-[10px] font-bold text-brand-500 uppercase tracking-widest">Split among</div>
-                      <button 
+                      <button
                         onClick={() => {
                           const allIds = participants.map(p => p.id);
                           const isAllSelected = expense.splitAmong.length === participants.length;
@@ -473,6 +457,7 @@ export default function App() {
                     <div className="flex flex-wrap gap-2">
                       {participants.map(p => {
                         const isActive = expense.splitAmong.includes(p.id);
+                        const pColor = getPColor(p.colorIndex);
                         return (
                           <button
                             key={p.id}
@@ -483,10 +468,10 @@ export default function App() {
                               updateExpense(expense.id, { splitAmong: newSplit });
                             }}
                             className={cn(
-                              "px-4 py-2.5 rounded-2xl text-xs font-bold transition-all border-2 min-h-[40px]",
-                              isActive 
-                                ? "bg-brand-900 text-white border-brand-900 shadow-lg shadow-brand-900/20 scale-105" 
-                                : "bg-white text-brand-400 border-brand-100 hover:border-brand-300"
+                              "px-5 py-2.5 rounded-[1.25rem] text-xs font-bold transition-all border-2 min-h-[40px] shadow-sm",
+                              isActive
+                                ? `${pColor.activeBg} ${pColor.activeText} ${pColor.activeBorder} shadow-md scale-[1.02]`
+                                : `bg-white ${pColor.text} ${pColor.border} hover:bg-slate-50 hover:${pColor.hoverBorder}`
                             )}
                           >
                             {p.name}
@@ -519,7 +504,7 @@ export default function App() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {individualBalances.map((p, idx) => (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: idx * 0.05 }}
@@ -568,7 +553,7 @@ export default function App() {
               Final Settlement
             </div>
             <div className="flex items-center gap-4">
-              <button 
+              <button
                 onClick={copyToClipboard}
                 className="text-[10px] font-bold text-brand-500 hover:text-brand-900 flex items-center gap-1 transition-colors"
               >
@@ -584,15 +569,17 @@ export default function App() {
             <div className="absolute top-0 right-0 p-12 opacity-5">
               <ArrowRightLeft size={200} />
             </div>
-            
+
             <div className="relative z-10 space-y-6 sm:space-y-8">
               {settlements.length > 0 ? (
                 <div className="grid gap-3 sm:gap-4">
                   {settlements.map((s, idx) => {
-                    const from = participants.find(p => p.id === s.from)?.name;
+                    const fromP = participants.find(p => p.id === s.from);
                     const to = participants.find(p => p.id === s.to)?.name;
+                    const fColor = fromP ? getPColor(fromP.colorIndex) : null;
+                    const from = fromP?.name;
                     return (
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: idx * 0.1 }}
@@ -600,7 +587,10 @@ export default function App() {
                         className="flex items-center justify-between p-4 sm:p-6 bg-white/5 rounded-2xl sm:rounded-3xl backdrop-blur-md border border-white/10 hover:bg-white/10 transition-all group"
                       >
                         <div className="flex items-center gap-3 sm:gap-4">
-                          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-xs sm:text-sm">
+                          <div className={cn(
+                            "w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm shadow-inner border border-white/20",
+                            fColor ? `${fColor.activeBg} ${fColor.activeText}` : 'bg-white/10 text-white'
+                          )}>
                             {from?.[0]}
                           </div>
                           <div className="flex flex-col">
