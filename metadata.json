@@ -1,0 +1,5 @@
+{
+  "name": "Splitly AI",
+  "description": "An intelligent bill splitting app that uses AI to parse scenarios and calculate fair settlements for groups.",
+  "requestFramePermissions": []
+}
